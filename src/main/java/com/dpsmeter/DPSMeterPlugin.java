@@ -11,9 +11,13 @@ import net.runelite.api.events.HitsplatApplied;
 import net.runelite.api.events.NpcDespawned;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.overlay.OverlayManager;
+
+import java.util.ArrayList;
+import java.util.List;
 
 
 @PluginDescriptor(
@@ -27,31 +31,40 @@ public class DPSMeterPlugin extends Plugin
 	@Inject
 	private Client client;
 	@Inject
+	@Getter
 	private DPSMeterConfig config;
 	@Inject
 	@Getter
 	private OverlayManager overlayManager;
 	@Inject
-	private MeterOverlay meterOverlay;
+	private DPSMeterOverlay dpsMeterOverlay;
 	private NPC recentlyDamagedNpc = null;
 	private long startTime;
 	private int totalDamage;
+	@Getter
+	private List<DPSMeterCharacter> characters = new ArrayList<>();
 
-	@Override
-	protected void startUp() throws Exception
+	@Provides
+	DPSMeterConfig provideConfig(ConfigManager configManager)
 	{
-		overlayManager.add(meterOverlay);
-		log.info("DPS Meter started!");
+		return configManager.getConfig(DPSMeterConfig.class);
 	}
 
 	@Override
-	protected void shutDown() throws Exception
-	{
-		overlayManager.remove(meterOverlay);
+	protected void startUp() throws Exception {
+		overlayManager.add(dpsMeterOverlay);
+		log.info("DPS Meter started!");
+		System.out.println(config.meterDisplayMode());
+	}
+
+	@Override
+	protected void shutDown() throws Exception {
+		overlayManager.remove(dpsMeterOverlay);
 		clearDPS();
 		log.info("DPS Meter stopped!");
 
 	}
+
 
 	private void clearDPS() {
 		startTime = 0;
@@ -59,42 +72,45 @@ public class DPSMeterPlugin extends Plugin
 	}
 
 	@Subscribe
-	public void onGameStateChanged(GameStateChanged gameStateChanged)
-	{
+	public void onGameStateChanged(GameStateChanged gameStateChanged) {
 		//TODO
 	}
 
 	@Subscribe
 	public void onHitsplatApplied(HitsplatApplied event) {
-
-
 		Player player = client.getLocalPlayer();
 		Actor actor = event.getActor();
 
 		if (actor instanceof NPC) {
-			recentlyDamagedNpc = (NPC) actor;
-		}
+			DPSMeterCharacter character = findCharacterByPlayer(player);
+			if (character == null) {
+				character = new DPSMeterCharacter(player, actor, config);
+				characters.add(character);
+			}
 
-		// Get startTime if not currently running
-		if (startTime == 0) {
-			startTime = System.currentTimeMillis();
-		}
+			// Get startTime if not currently running
+			if (character.getStartTime() == 0) {
+				character.setStartTime(System.currentTimeMillis());
+			}
 
-		// If player's offensive hitsplat then add to totalDamage
-		if (event.getHitsplat().isMine() && actor != player) {
-			totalDamage += event.getHitsplat().getAmount();
-			meterOverlay.setHitsplatApplied(true);
+			// If player's offensive hitsplat then add to totalDamage and set overlay hitsplatApplied flag true
+			if (event.getHitsplat().isMine() && actor != player) {
+				int damageAmount = event.getHitsplat().getAmount();
+				character.setTotalDamage(character.getTotalDamage() + damageAmount);
+				character.setHitsplatApplied(true);
+				dpsMeterOverlay.setHitsplatApplied(true);
+				System.out.println(characters);
+			}
 		}
 	}
 
-	public double calcDPS(int totalDamage, long startTime) {
-		long elapsedTime = System.currentTimeMillis() - startTime;
-		double dps = totalDamage / (elapsedTime / 1000.0);
-		return dps;
-	}
-
-	public double getCalculatedDPS() {
-		return calcDPS(totalDamage, startTime);
+	private DPSMeterCharacter findCharacterByPlayer(Player player) {
+		for (DPSMeterCharacter character : characters) {
+			if (character.getPlayer().equals(player)) {
+				return character;
+			}
+		}
+		return null;
 	}
 
 	@Subscribe
@@ -105,11 +121,15 @@ public class DPSMeterPlugin extends Plugin
 			recentlyDamagedNpc = null;
 		}
 	}
-
-	@Provides
-	DPSMeterConfig provideConfig(ConfigManager configManager)
-	{
-		return configManager.getConfig(DPSMeterConfig.class);
+	@Subscribe
+	public void onConfigChanged(ConfigChanged configChanged) {
+		if (configChanged.getGroup().equals("dpsmeter")) {
+			dpsMeterOverlay.updateOverlayContent(characters);
+		}
 	}
+
+
+
+
 
 }
